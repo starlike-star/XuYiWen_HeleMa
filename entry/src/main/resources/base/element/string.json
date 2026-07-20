@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "每日喝水打卡"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "喝了吗每日喝水打卡"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "喝了吗"
+    }
+  ]
+}
