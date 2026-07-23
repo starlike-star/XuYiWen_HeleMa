@@ -1,37 +1,33 @@
 # 喝了吗
 
-「喝了吗」是一款 HarmonyOS 每日喝水打卡应用。第一版包含完整开屏动画、今日 8 次喝水进度、液态水杯动画、普通/达标打卡反馈、今日记录和最近 7 天统计，并提供可切换 Mock/MySQL 的独立 REST API。
+应用正式包名为 `com.helema.water`，不再使用模板包名 `com.example.myapplication`。唯一包名可避免开发环境中代理提醒配额与其他模板应用或旧调试安装发生冲突。
 
-## 技术栈与结构
+「喝了吗」是一款 HarmonyOS 每日喝水打卡应用。当前版本提供动态目标、单次饮水量、撤销与删除、周/月统计、月历、连续达标和本地滚动提醒，并支持 Mock 与 MySQL 两种数据模式。
 
-- 客户端：HarmonyOS Stage 模型、ArkTS、ArkUI、API 24、Hvigor。
+## 技术栈与目录
+
+- 客户端：HarmonyOS Stage、ArkTS、ArkUI、API 24、Hvigor。
 - 服务端：Node.js、Express、mysql2、Luxon。
-- 数据库：MySQL 8.x；所有时间按 UTC 保存，服务端以 `Asia/Shanghai` 划分自然日。
-
-主要目录：
+- 数据库：MySQL 8.x；记录保存为 UTC，服务端按 `Asia/Shanghai` 计算日期边界。
 
 ```text
 entry/src/main/ets/
-├─ api/                 # 集中式 HTTP 客户端及 health 地址探测
-├─ components/
-│  ├─ animations/      # 开屏和液态水杯 Canvas 动画
-│  └─ common/          # 标准 ArkUI 状态面板、玻璃底栏
-├─ config/             # 唯一 API 地址配置
-├─ models/             # API/饮水数据模型
-├─ pages/              # 开屏入口、主页面和今日/记录视图
-└─ store/              # 加载、打卡、错误与反馈状态
-
+├─ api/                 # 集中 HTTP 客户端
+├─ components/          # 液体动画、导航和记录行
+├─ config/              # 唯一 API 地址配置
+├─ models/              # API、统计和提醒模型
+├─ pages/views/         # 首页、统计/月历、我的设置
+├─ services/            # 本地滚动提醒与 Preferences
+└─ store/               # 所有页面共享的状态和统一刷新
 server/
-├─ src/
-│  ├─ repositories/    # Mock、MySQL、未配置三种数据仓库
-│  ├─ app.js           # REST 路由和统一错误响应
-│  ├─ waterService.js  # 日期边界、聚合和完成规则
-│  └─ server.js        # 服务启动与连接池优雅关闭
-├─ sql/init.sql        # 可重复执行的数据库初始化脚本
-└─ test/               # 核心 API 测试和 Mock 冒烟测试
+├─ src/repositories/    # Mock、MySQL、未配置 Repository
+├─ src/waterService.js  # 日期详情、动态目标和统计
+├─ src/streakService.js # 当前/最长连续达标计算
+├─ sql/init.sql         # 可重复执行的数据库初始化
+└─ test/                # 核心 API 与 Mock 冒烟测试
 ```
 
-## 后端启动
+## 服务端启动
 
 需要 Node.js 20 或更高版本。
 
@@ -39,110 +35,215 @@ server/
 cd server
 npm install
 Copy-Item .env.example .env
-npm start
+npm.cmd start
 ```
 
-默认 `DATA_MODE=mock`，无需数据库即可体验。Mock 数据只保存在服务进程内，重启后会清空。
-
-可用接口：
-
-- `GET /api/health`
-- `GET /api/water/today`
-- `POST /api/water/check-in`，可选 JSON：`{"amountMl": 250}`
-- `GET /api/water/history?days=7`
-
-成功响应统一为 `{ "success": true, "data": ... }`；错误响应统一为 `{ "success": false, "error": { "code", "message" } }`。客户端 POST 会发送 `Idempotency-Key`，重复请求不会产生重复记录。
-
-## MySQL 配置与初始化
-
-将 `server/.env` 修改为：
+环境变量：
 
 ```env
-DATA_MODE=mysql
+DATA_MODE=mock
 SERVER_PORT=3000
 APP_TIME_ZONE=Asia/Shanghai
 DEFAULT_USER_ID=1
+
 DB_HOST=
 DB_PORT=3306
-DB_NAME=
+DB_NAME=helema
 DB_USER=
 DB_PASSWORD=
 ```
 
-仓库不会提交 `.env` 或真实凭据。先创建数据库并选中该库，再执行：
+- `DATA_MODE=mock`：无需数据库，服务重启后数据清空。
+- `DATA_MODE=mysql`：使用 MySQL 持久化；缺少配置时服务仍启动，health 返回 `not_configured`。
+- `.env` 和真实数据库凭据不会提交到仓库。
+
+## MySQL 初始化
+
+`server/sql/init.sql` 会创建并选择 `helema` 数据库，然后幂等创建：
+
+- `users`：用户。
+- `water_records`：每次打卡的独立 UTC 记录和幂等键。
+- `user_daily_goals`：按生效日期保存目标，唯一键为 `(user_id, effective_date)`。
+
+MySQL 模式必须保留 `DEFAULT_USER_ID` 对应的 `users` 行。health 会同时检查数据库连接、必需表和默认用户；若默认用户缺失，应重新执行 `init.sql`，否则打卡写入会被 `water_records.user_id` 外键拒绝。
+
+执行：
 
 ```powershell
-Get-Content .\sql\init.sql -Raw | mysql -h <host> -P 3306 -u <user> -p <database>
+cd server
+mysql -h 127.0.0.1 -P 3306 -u root -p --execute="source C:/完整路径/server/sql/init.sql"
 ```
 
-初始化脚本使用 `CREATE TABLE IF NOT EXISTS`，默认用户使用固定 ID 和 `ON DUPLICATE KEY UPDATE`，可以重复执行。`water_records` 每次打卡保存一条独立记录；完成率只按每天记录数是否达到 8 判断，`amount_ml` 暂不参与进度。
+如果使用其他数据库名，需要同步修改 SQL 顶部的 `CREATE DATABASE`/`USE` 和 `.env` 的 `DB_NAME`。脚本可以连续执行；同一用户同一天重复保存目标只会更新原行。
 
-当 MySQL 环境变量缺失时，服务仍可启动，health 返回 `not_configured`；连接失败返回 `unavailable`。业务接口会返回 `DB_NOT_CONFIGURED` 或 `DB_UNAVAILABLE`，不会暴露数据库连接信息。
+## REST API
 
-## 客户端构建与 API 地址
+成功响应统一为 `{ "success": true, "data": ... }`，失败响应统一为 `{ "success": false, "error": { "code", "message" } }`。
 
-`entry/src/main/ets/config/AppConfig.ets` 是唯一的 API 地址配置位置。当前候选值为：
+- `GET /api/health`
+- `GET /api/water/today`
+- `GET /api/water/history?days=7`
+- `GET /api/water/settings`
+- `PUT /api/water/settings`
+- `POST /api/water/check-in`
+- `DELETE /api/water/records/:id`
+- `GET /api/water/day?date=YYYY-MM-DD`
+- `GET /api/water/stats?period=week|month&anchor=YYYY-MM-DD`
 
-1. `http://192.168.128.1:3000`（VMware VMnet8/NAT 宿主机地址）；
-2. `http://192.168.10.1:3000`（VMware VMnet1/Host-only 宿主机地址）；
-3. `http://172.16.1.1:3000`（当前自定义 VMware 网卡宿主机地址）；
-4. `http://172.23.217.223:3000`（本次开发机 WLAN 地址）。
+`PUT /settings` 只更新当天目标。`POST /check-in` 不再接收自定义水量，返回 `created`、`idempotentReplay`、`recordId` 和最新 `today`；只有 `created=true` 时客户端显示五秒撤销。
 
-应用启动时逐个请求 `/api/health`，只采用实际成功的地址。这里必须填写宿主机地址，不能填写虚拟机自身地址。网络变化后，应保留虚拟机实际网络模式对应的宿主机地址，避免每项超时造成长时间等待。
+每日完成状态、周月达标和连续天数只按次数计算。新记录内部固定保存 250ml 兼容值，首页和设置页不再提供单次水量配置；历史日期详情仍可展示已有记录中的水量数据。
 
-`entry/src/main/module.json5` 已声明 `ohos.permission.INTERNET`。本工程 API 24 的清单 schema 实测不接受 `AppScope.app.network`，因此没有保留无效的 `cleartextTraffic` 字段。当前明文 HTTP 已通过开发机请求验证，但由于本次没有连接 HarmonyOS 设备，设备端策略仍需在模拟器/真机上实际验证；如果设备拒绝 HTTP，应优先改用开发 HTTPS 反向代理或按当前 HarmonyOS SDK/设备策略配置受信任域名，不能直接加入无法通过 schema 的字段。
+## 客户端与网络配置
 
-命令行构建：
+API 候选地址只在 [AppConfig.ets](./entry/src/main/ets/config/AppConfig.ets) 中维护。应用启动时逐个请求 `/api/health`，只使用实际成功的地址。`10.0.2.2` 只是待验证的模拟器候选，失败后会继续尝试 VMware 宿主机地址和电脑 WLAN IPv4。
+
+VMware 联调时应填写宿主机对应虚拟网卡的 IPv4，而不是虚拟机自身 IP。真机需与电脑位于可互访的同一局域网，并确保 TCP 3000 入站放行。
+
+`module.json5` 已声明：
+
+- `ohos.permission.INTERNET`
+- `ohos.permission.PUBLISH_AGENT_REMINDER`
+
+当前 API 24 schema 不接受先前尝试的 `app.network.cleartextTraffic` 字段，因此未保留无效配置。开发机 HTTP 服务可用；模拟器/真机是否允许明文 HTTP 必须在实际设备上通过 health 验证。
+
+构建 debug HAP：
 
 ```powershell
 $env:DEVECO_SDK_HOME='C:\Program Files\Huawei\DevEco Studio\sdk'
 & 'C:\Program Files\Huawei\DevEco Studio\tools\hvigor\bin\hvigorw.bat' assembleHap --mode module -p product=default -p module=entry@default -p buildMode=debug --no-daemon
 ```
 
-也可以直接在 DevEco Studio 中选择 `entry` 模块运行。项目尚未配置签名，命令行会生成未签名 debug HAP；部署设备时使用 DevEco Studio 自动签名或补充签名配置。
+项目未配置命令行签名，Hvigor 会生成未签名 debug HAP；设备运行可使用 DevEco Studio 自动签名。
 
-## 本次实际验证结果
+### DevEco 安装成功但 Ability 启动失败
 
-验证日期：2026-07-20。
+如果日志显示 HAP 已安装，但 `aa start` 报 `10104001`，先对比日志中的 `Launching <bundleName>` 与 `AppScope/app.json5` 的 `bundleName`。修改包名后，`clean` 只清理构建产物，不会刷新 DevEco 的项目同步模型；如果日志仍启动旧包名，应执行完整 Hvigor 同步：
 
-- 后端自动测试：通过；覆盖 health 状态、空记录、饮水量、幂等、第 8 次/超目标、连续 7 天、上海时区跨日、错误响应。
-- Mock API 冒烟：通过；health、today、check-in、history 均返回预期数据。
-- 开发机 health：`127.0.0.1:3000` 通过，`172.23.217.223:3000` 通过，开发机自身访问 `10.0.2.2:3000` 不可用。
-- HarmonyOS debug HAP：通过 API 24 实际构建。
-- 模拟器/真机：`hdc list targets` 返回 `[Empty]`，本次无法声称设备端地址、明文 HTTP 或交互已经验证。连接设备后需重新执行下方检查。
+```powershell
+& 'C:\Program Files\Huawei\DevEco Studio\tools\node\node.exe' `
+  'C:\Program Files\Huawei\DevEco Studio\tools\hvigor\bin\hvigorw.js' --sync
+```
+
+随后确认 `.hvigor/outputs/sync/output.json` 中的 `BUNDLE_NAME` 已更新，再在 DevEco 中重新同步或重新打开项目。不要通过反复 `clean` 处理此类运行配置缓存问题。
+
+## 功能说明
+
+- 首页液体进度使用服务端动态目标；设置或删除导致完成状态变化时只调整液位。
+- 只有新打卡首次跨越目标时播放完成庆祝；目标修改、删除、撤销和幂等重放不会误播。
+- 首页只保留一个完整宽度的玻璃打卡按钮，已移除水量选择和右上角快捷键。
+- 新打卡提供五秒撤销；月历日期详情支持左滑删除并二次确认。
+- 统计页按周一至周日或自然月一次加载完整连续日期；月历不会逐日请求。
+- 当前连续在今天未达标时从昨天计算，最长连续覆盖所有聚合历史。
+
+## 本地提醒
+
+提醒使用一次性 Calendar Reminder 和两日滚动窗口：每次校准维护今天剩余时间槽与明天全部时间槽。当天达标只取消今天剩余项，明天项继续保留；删除记录或提高目标后会补回今天未来时间槽。
+
+Preferences 中每项保存 `reminderId`、`scheduledAt`、`slotKey` 和 `configVersion`。设置变化只取消失效项，`slotKey` 防止重复发布。提醒间隔提供 60、120、180 分钟；第三方应用最多有 30 个有效代理提醒，保存前会校验两日窗口容量。
+
+如果系统返回 `1700002`，客户端会清空当前应用的代理提醒、逐条补充取消残留项、轮询确认系统数量归零，并按 2、4、6 秒分段等待配额释放后重试。失败提示会附带运行时包名、清理前数量、清理后数量和本次计划数量；当公开列表为 0 但第一条仍被拒绝时，提示会明确标记为系统内部配额与公开列表不一致，而不是权限问题。
+
+界面区分以下真实状态：
+
+- `disabled`
+- `enabled`
+- `permission_required`
+- `system_notification_disabled`
+- `publish_failed`
+- `partially_scheduled`
+
+只有系统授权有效且所有目标槽实际发布成功后才显示“已启用”。提醒按设备本地时钟触发，服务端的今日和统计日期仍按 `Asia/Shanghai`。
+
+## App 图标
+
+- 原始素材：[app_icon_source.png](./design-references/app_icon_source.png)
+- 1024 主图标：`app_icon_1024.png`
+- 启动图标：`start_icon.png`
+
+图标没有按近黑色像素直接抠图，而是重建完整蓝色渐变方形背景交给系统蒙版裁切。`design-references/icon-previews` 保留 96、72、48px 检查图；48px 下水滴、水杯和对勾仍可辨认。
+
+图标母版通过内置 imagegen 编辑流程生成，使用的最终提示重点为：延展原有蓝色渐变到完整方形画布，仅替换黑色四角，保持中央白色水滴、水杯、液面、气泡和对勾的几何、位置与比例不变，不添加文字或新元素。
+
+## 2026-07-21 实际验证结果
+
+- 后端自动测试：通过，13 项测试覆盖 health、动态设置、幂等打卡、删除、日期详情、周月连续日期、历史目标、连续达标和错误结构。
+- Mock API 冒烟：通过，覆盖 health、settings、check-in、day、history、month stats 和 delete。
+- MySQL 初始化：`init.sql` 在端口 3308 的开发数据库连续执行两次成功；默认用户 1 条、重复目标 0 条。当前迁移不再创建或写入单次水量设置表。
+- MySQL API 冒烟：通过，health 为 `connected`，settings、check-in、day、week、month、delete 均返回预期结构；冒烟打卡随后已删除。
+- 宿主机网络：Node 正在 `0.0.0.0:3000` 监听，MySQL 正在 `0.0.0.0:3308` 监听；`127.0.0.1`、三个 VMware 宿主机 IPv4 和当前 WLAN IPv4 的 health 均返回 `database.status=connected`。
+- HarmonyOS API 24 debug HAP：加入地址逐项诊断与提醒配额延迟恢复后重新构建通过。
+- DevEco 实际使用的 `hdc` 与用户 SDK 中的 `hdc` 均返回 `[Empty]`，因此尚不能从设备侧判断虚拟机静态 IP、HTTP 请求错误或系统 ReminderAgent 数据库；系统提醒、明文 HTTP、挖孔屏布局和完整交互仍不宣称通过。
 
 设备联调步骤：
 
-1. 启动 Mock API，并确认电脑防火墙允许 TCP 3000。
-2. 执行 `hdc list targets`，确认存在设备。
-3. 从设备运行应用，观察是否通过 health 进入首页；若首个候选失败，会继续尝试局域网地址。
-4. 验证开屏只跳转一次、普通打卡、第 8 次完成动画、记录页和失败重试。
-5. 真机需与电脑处于可互访的同一局域网；用浏览器或应用 health 请求确认后再记录为通过。
+1. 启动 API 并在电脑上确认 `GET /api/health`。
+2. 执行 `hdc list targets`，确认设备已连接。
+3. 在设备浏览器或应用中验证候选宿主机/LAN 地址的 health。
+4. 验证首页打卡、五秒撤销、删除确认、目标反转、周月统计和月历详情。
+5. 开启通知授权，验证今天/明天提醒、重复校准不重复、达标只取消今天以及六种提醒状态。
 
-当前开发机已创建 Windows 防火墙入站规则 `HeLeMaAPI3000`：允许 `LocalSubnet` 访问 TCP 3000，不对互联网任意来源开放。若需要删除该规则，请在管理员 PowerShell 执行 `netsh advfirewall firewall delete rule name=HeLeMaAPI3000`。
+## 暂未实现与已知限制
 
-VMware 联调时不要把虚拟机自身 IP 写入 `AppConfig.ets`。推荐将虚拟机网卡设为 NAT/DHCP；当前 VMnet8 宿主机地址为 `192.168.128.1`，虚拟机应获得同网段的 `192.168.128.x` 地址，并访问 `http://192.168.128.1:3000/api/health`。手工设置到无宿主机路由的其他网段会导致双向不可达。
+- 暂未实现登录、多用户切换、社交、多设备同步、云端推送、复杂健康分析和 AI 建议。
+- Mock 模式重启后数据清空。
+- 滚动提醒保障今天和明天；若应用连续超过两天完全未被系统或用户唤起，后续窗口无法继续扩展。
+- 当前环境没有连接模拟器或真机，设备端验收仍待完成。
+# 账号登录与旧数据迁移
 
-## 已完成与暂未完成
+客户端只通过 Node.js REST API 访问数据，不直接连接 MySQL。第一版账号由本地脚本管理，
+没有公开注册、短信验证码、找回密码、第三方登录或管理后台。
 
-已完成：
+生产或局域网 MySQL 模式必须设置 `ACCESS_TOKEN_SECRET`（使用足够长的随机值），并配置
+`DATA_MODE=mysql`、`DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USER`、`DB_PASSWORD`。
+Access Token 默认 30 分钟，Refresh Token 默认 30 天，可分别通过
+`ACCESS_TOKEN_TTL_SECONDS` 和 `REFRESH_TOKEN_TTL_SECONDS` 调整。
 
-- 应用名称统一为「喝了吗」，模板 HelloWorld 页面已替换。
-- 约 2.5 秒开屏动画及最大 3 秒、只能触发一次的替换式路由兜底。
-- 首页采用 Apple Liquid Glass 视觉语义：清晰内容层、折射感工具按钮/主按钮/底栏，以及平面化圆形液体水舱。
-- 液体水舱包含双层水面、波纹、气泡、水位平滑上升、普通打卡回弹和第 8 次增强反馈；Canvas 仅绘制水体相关元素。
-- 开屏已移除 Emoji，改为独立 Canvas 水滴标志、玻璃承载面、涟漪和单次替换式跳转。
-- 第 8 次目标完成状态，超过目标仍可继续打卡。
-- 今日时间线、连续最近 7 天统计及空数据/加载/错误/数据库未配置状态。
-- Mock/MySQL 数据仓库、UTC 存储、`Asia/Shanghai` 日界线、参数化 SQL、连接池关闭和幂等记录。
+先重复执行安全的初始化脚本 `server/sql/init.sql`。密码从标准输入读取，脚本不会回显或
+输出明文密码：
 
-第一版暂未实现：
+```powershell
+'A-strong-password1' | npm.cmd run account -- create --phone 13800000000 --nickname 喝水用户
+'A-new-password2' | npm.cmd run account -- change-password --phone 13800000000
+npm.cmd run account -- disable --phone 13800000000
+npm.cmd run account -- enable --phone 13800000000
+npm.cmd run account -- list
+```
 
-- 撤销或删除打卡（Repository 已保留按记录 ID 删除的扩展边界，但没有公开 API 或 UI）。
-- 登录、多用户切换、通知、社交、商城、多设备同步、复杂健康建议和 AI 分析。
-- `amountMl` 参与饮水目标计算。
-- 复杂粒子效果和复杂统计图表。
+旧版本固定 `DEFAULT_USER_ID`（默认值为 `1`）下的饮水记录和目标不会自动归给任意新账号。
+创建目标账号后，执行以下命令把旧记录明确归属给该账号：
 
-已知限制：HarmonyOS/ArkUI 不提供 SwiftUI 的 `glassEffect` 或 `GlassEffectContainer`，当前实现使用标准 ArkUI 组件叠加半透明材质、背景模糊、双层边缘高光、环境色反射和弹性动画复现同等设计语义，并未把页面绘制到 Canvas。Mock 重启后数据清空；真实持久化需要 MySQL；设备联调和明文 HTTP 仍待连接模拟器/真机验证；开发机 IP 变化后需更新集中配置。
+```powershell
+npm.cmd run account -- migrate-default --to-phone 13800000000 --legacy-user-id 1
+```
 
-建议重点查看开屏水滴与单次跳转、首页液态水位、连续普通打卡反馈、第 8 次完成状态、记录页连续 7 天补零，以及关闭数据库配置后的友好错误页。
+该迁移在事务中执行且可重复运行；重复执行不会复制饮水记录或目标。迁移后，原
+`DEFAULT_USER_ID=1` 的 `water_records` 与 `user_daily_goals` 均归属于
+`--to-phone` 指定的账号。服务端业务接口不再读取 `DEFAULT_USER_ID`，也不接受客户端
+传入 `userId`。
+
+## 外观与桌面卡片
+
+“我的设置”支持跟随系统、浅色和深色三种外观。页面使用 `base/dark` 下的统一语义颜色，
+深色背景为深蓝黑；启动窗口也提供对应深色资源，避免纯白闪屏。
+
+中型 `2×4` 桌面卡片名为 `water_card`。卡片平时读取应用同步写入的本地缓存；点击右侧
+水杯按钮会由 FormExtension 使用 Asset Store 中的安全会话调用 Node.js REST API 完成一次
+打卡，仍然不会直接连接 MySQL。点击左侧进度圈打开应用，不再显示额外的“打开应用”按钮。
+应用在登录、启动完成、打卡、撤销、删除、修改目标和退出登录后刷新缓存；网络请求开始前
+把现有缓存标记为“可能非最新”，成功后写入新的更新时间。退出登录会清空 Asset Store
+中的 Token 和卡片个人数据，不删除服务端饮水记录。
+
+构建命令：
+
+```powershell
+$env:DEVECO_SDK_HOME='C:\Program Files\Huawei\DevEco Studio\sdk'
+& 'C:\Program Files\Huawei\DevEco Studio\tools\node\node.exe' `
+  'C:\Program Files\Huawei\DevEco Studio\tools\hvigor\bin\hvigorw.js' `
+  --mode module -p product=default -p buildMode=debug assembleHap
+```
+
+卡片尺寸、安全区、文字截断、点击跳转、浅深色切换、Asset Store 持久化和主动刷新必须在
+HarmonyOS 真机上完成最终验收；模拟器或仅编译成功不能替代真机验收。
+#   H e l e M a  
+ 
