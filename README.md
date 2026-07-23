@@ -1,7 +1,5 @@
 # 喝了吗
 
-应用正式包名为 `com.helema.water`，不再使用模板包名 `com.example.myapplication`。唯一包名可避免开发环境中代理提醒配额与其他模板应用或旧调试安装发生冲突。
-
 「喝了吗」是一款 HarmonyOS 每日喝水打卡应用。当前版本提供动态目标、单次饮水量、撤销与删除、周/月统计、月历、连续达标和本地滚动提醒，并支持 Mock 与 MySQL 两种数据模式。
 
 ## 技术栈与目录
@@ -245,5 +243,6 @@ $env:DEVECO_SDK_HOME='C:\Program Files\Huawei\DevEco Studio\sdk'
 
 卡片尺寸、安全区、文字截断、点击跳转、浅深色切换、Asset Store 持久化和主动刷新必须在
 HarmonyOS 真机上完成最终验收；模拟器或仅编译成功不能替代真机验收。
-#   H e l e M a  
+#   H e l e M a 
+ 
  

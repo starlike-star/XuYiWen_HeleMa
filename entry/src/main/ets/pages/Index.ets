@@ -31,7 +31,7 @@ struct Index {
       Column()
         .width('100%')
         .height('100%')
-        .backgroundColor('#F4FAFC')
+        .backgroundColor($r('app.color.page_background'))
         .expandSafeArea(
           [SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
           [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]

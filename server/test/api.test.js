@@ -3,130 +3,192 @@ import { afterEach, beforeEach, test } from 'node:test';
 import { createApp } from '../src/app.js';
 import { MockWaterRepository } from '../src/repositories/mockWaterRepository.js';
 import { UnconfiguredRepository } from '../src/repositories/unconfiguredRepository.js';
+import { StreakService } from '../src/streakService.js';
 import { WaterService } from '../src/waterService.js';
+import { AuthService } from '../src/auth/authService.js';
 
 const fixedNow = new Date('2026-07-19T10:00:00.000Z');
-const baseConfig = {
-  dataMode: 'mock',
-  timeZone: 'Asia/Shanghai',
-  defaultUserId: 1
+const authConfig = {
+  accessTokenSecret: 'test-secret', accessTokenTtlSeconds: 1800,
+  refreshTokenTtlSeconds: 2592000, bcryptRounds: 10,
+  loginFailureLimit: 5, loginLockSeconds: 900
 };
+const baseConfig = { dataMode: 'mock', timeZone: 'Asia/Shanghai', auth: authConfig };
 
 let server;
 let baseUrl;
+let repository;
+let accessToken;
 
-async function start(repository = new MockWaterRepository(), config = baseConfig) {
+async function start(nextRepository = new MockWaterRepository(), config = baseConfig,
+  authRepository = nextRepository) {
+  repository = nextRepository;
   const service = new WaterService(repository, config, () => new Date(fixedNow));
-  const app = createApp(service);
+  const auth = new AuthService(authRepository, authConfig, () => new Date(fixedNow));
+  await auth.createAccount('13800000000', 'Password1!', '测试用户');
+  accessToken = (await auth.login('13800000000', 'Password1!')).accessToken;
+  const app = createApp(service, auth);
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
   baseUrl = `http://127.0.0.1:${server.address().port}`;
-  return repository;
+}
+
+async function json(path, options) {
+  const requestOptions = { ...(options || {}), headers: { ...(options?.headers || {}) } };
+  if (path.startsWith('/api/water')) requestOptions.headers.Authorization = `Bearer ${accessToken}`;
+  const response = await fetch(`${baseUrl}${path}`, requestOptions);
+  return { response, body: await response.json() };
+}
+
+async function checkIn(key) {
+  return json('/api/water/check-in', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
+    body: '{}'
+  });
 }
 
 beforeEach(async () => start());
 afterEach(async () => new Promise((resolve) => server.close(resolve)));
 
-test('health 区分 Mock 模式且服务可用', async () => {
-  const response = await fetch(`${baseUrl}/api/health`);
-  const body = await response.json();
+test('health 区分服务与数据模式', async () => {
+  const { body } = await json('/api/health');
   assert.equal(body.data.service, 'up');
   assert.equal(body.data.dataMode, 'mock');
   assert.equal(body.data.database.status, 'not_required');
 });
 
-test('health 可表达数据库已连接和不可用', async () => {
-  const connectedService = new WaterService({
-    health: async () => ({ status: 'connected', message: '数据库连接正常。' })
-  }, { ...baseConfig, dataMode: 'mysql' }, () => new Date(fixedNow));
-  const unavailableService = new WaterService({
-    health: async () => ({ status: 'unavailable', message: '数据库暂时不可用。' })
-  }, { ...baseConfig, dataMode: 'mysql' }, () => new Date(fixedNow));
-  assert.equal((await connectedService.health()).database.status, 'connected');
-  assert.equal((await unavailableService.health()).database.status, 'unavailable');
+test('默认设置和空的今日统计使用 8 次目标', async () => {
+  const settings = await json('/api/water/settings');
+  const today = await json('/api/water/today');
+  assert.deepEqual(settings.body.data, { dailyTarget: 8, goalEffectiveDate: null });
+  assert.equal(today.body.data.target, 8);
+  assert.equal(today.body.data.totalAmountMl, 0);
 });
 
-test('今日初始为空并使用固定目标 8', async () => {
-  const body = await (await fetch(`${baseUrl}/api/water/today`)).json();
-  assert.equal(body.data.date, '2026-07-19');
-  assert.equal(body.data.count, 0);
-  assert.equal(body.data.target, 8);
-  assert.equal(body.data.completed, false);
+test('打卡返回创建、幂等重放、记录 ID 和最新 today', async () => {
+  const first = await checkIn('same-key');
+  const second = await checkIn('same-key');
+  assert.equal(first.response.status, 201);
+  assert.equal(first.body.data.created, true);
+  assert.equal(first.body.data.idempotentReplay, false);
+  assert.equal(first.body.data.today.count, 1);
+  assert.equal(first.body.data.today.totalAmountMl, 250);
+  assert.equal(second.response.status, 200);
+  assert.equal(second.body.data.created, false);
+  assert.equal(second.body.data.idempotentReplay, true);
+  assert.equal(second.body.data.recordId, first.body.data.recordId);
+  assert.equal(second.body.data.today.count, 1);
 });
 
-test('打卡支持饮水量并对幂等键去重', async () => {
-  const options = {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'same-key' },
-    body: JSON.stringify({ amountMl: 360 })
-  };
-  const first = await (await fetch(`${baseUrl}/api/water/check-in`, options)).json();
-  const second = await (await fetch(`${baseUrl}/api/water/check-in`, options)).json();
-  assert.equal(first.data.count, 1);
-  assert.equal(first.data.records[0].amountMl, 360);
-  assert.equal(first.data.created, true);
-  assert.equal(second.data.count, 1);
-  assert.equal(second.data.created, false);
+test('目标同日更新只保留一条，打卡使用固定记录水量', async () => {
+  await json('/api/water/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dailyTarget: 10 })
+  });
+  const changed = await json('/api/water/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dailyTarget: 6 })
+  });
+  const checked = await checkIn('uses-default');
+  assert.equal(changed.body.data.today.target, 6);
+  assert.equal(repository.goals.size, 1);
+  assert.equal(checked.body.data.today.records[0].amountMl, 250);
 });
 
-test('第 8 次完成，超过目标仍可打卡', async () => {
-  for (let index = 1; index <= 9; index += 1) {
-    const response = await fetch(`${baseUrl}/api/water/check-in`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `key-${index}` },
-      body: '{}'
-    });
-    assert.equal(response.status, 201);
-  }
-  const today = await (await fetch(`${baseUrl}/api/water/today`)).json();
-  assert.equal(today.data.count, 9);
-  assert.equal(today.data.completed, true);
+test('修改目标立即反转今天完成状态', async () => {
+  for (let index = 0; index < 8; index += 1) await checkIn(`target-${index}`);
+  const raised = await json('/api/water/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dailyTarget: 10 })
+  });
+  assert.equal(raised.body.data.today.completed, false);
+  const lowered = await json('/api/water/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dailyTarget: 6 })
+  });
+  assert.equal(lowered.body.data.today.completed, true);
 });
 
-test('最近 7 天返回连续日期并补零', async () => {
-  const history = await (await fetch(`${baseUrl}/api/water/history?days=7`)).json();
-  assert.equal(history.data.days.length, 7);
-  assert.deepEqual(history.data.days.map((item) => item.date), [
+test('删除返回受影响日期与最新日期统计', async () => {
+  const checked = await checkIn('delete-me');
+  const recordId = checked.body.data.recordId;
+  const deleted = await json(`/api/water/records/${recordId}`, { method: 'DELETE' });
+  assert.equal(deleted.body.data.deletedRecordId, recordId);
+  assert.equal(deleted.body.data.affectedDate, '2026-07-19');
+  assert.equal(deleted.body.data.day.count, 0);
+  const missing = await json(`/api/water/records/${recordId}`, { method: 'DELETE' });
+  assert.equal(missing.response.status, 404);
+  assert.equal(missing.body.error.code, 'RECORD_NOT_FOUND');
+});
+
+test('日期详情返回单条水量和累计毫升数', async () => {
+  await checkIn('amount-a');
+  await checkIn('amount-b');
+  const day = await json('/api/water/day?date=2026-07-19');
+  assert.equal(day.body.data.count, 2);
+  assert.equal(day.body.data.totalAmountMl, 500);
+  assert.deepEqual(day.body.data.records.map((record) => record.amountMl), [250, 250]);
+});
+
+test('周和月统计返回完整连续日期且只统计次数', async () => {
+  await checkIn('stats-one');
+  const week = await json('/api/water/stats?period=week&anchor=2026-07-19');
+  const month = await json('/api/water/stats?period=month&anchor=2026-07-01');
+  assert.equal(week.body.data.days.length, 7);
+  assert.deepEqual(week.body.data.range, { startDate: '2026-07-13', endDate: '2026-07-19' });
+  assert.equal(week.body.data.summary.totalCount, 1);
+  assert.equal(month.body.data.days.length, 31);
+  assert.equal(month.body.data.days[0].date, '2026-07-01');
+  assert.equal(month.body.data.days[30].date, '2026-07-31');
+  assert.ok(month.body.data.days.every((day) => !Object.hasOwn(day, 'amountMl')));
+});
+
+test('连续达标 Service 使用聚合行和历史目标', () => {
+  const service = new StreakService();
+  const result = service.calculate([
+    { date: '2026-07-15', count: 8 },
+    { date: '2026-07-16', count: 8 },
+    { date: '2026-07-18', count: 6 }
+  ], [
+    { effectiveDate: '2026-07-18', targetCount: 6 }
+  ], '2026-07-19', 'Asia/Shanghai');
+  assert.deepEqual(result, { current: 1, longest: 2 });
+});
+
+test('history 继续返回完整连续七天并使用动态目标', async () => {
+  await json('/api/water/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dailyTarget: 5 })
+  });
+  const history = await json('/api/water/history?days=7');
+  assert.deepEqual(history.body.data.days.map((day) => day.date), [
     '2026-07-13', '2026-07-14', '2026-07-15', '2026-07-16',
     '2026-07-17', '2026-07-18', '2026-07-19'
   ]);
-  assert.ok(history.data.days.every((item) => item.count === 0));
+  assert.equal(history.body.data.days[6].target, 5);
+  assert.equal(history.body.data.days[5].target, 8);
 });
 
-test('Asia/Shanghai 的零点边界由服务端判定', async () => {
-  const repository = new MockWaterRepository();
-  await repository.create({
-    userId: 1,
-    amountMl: 250,
-    drankAt: new Date('2026-07-18T16:00:00.000Z'),
-    idempotencyKey: 'midnight'
-  });
-  const service = new WaterService(repository, baseConfig, () => new Date('2026-07-18T16:01:00.000Z'));
-  const today = await service.today();
-  assert.equal(today.date, '2026-07-19');
-  assert.equal(today.count, 1);
-});
-
-test('数据库未配置返回结构化错误', async () => {
+test('数据库未配置时业务接口返回结构化错误', async () => {
   await new Promise((resolve) => server.close(resolve));
-  await start(new UnconfiguredRepository(), { ...baseConfig, dataMode: 'mysql' });
-  const health = await (await fetch(`${baseUrl}/api/health`)).json();
-  assert.equal(health.data.database.status, 'not_configured');
-  const response = await fetch(`${baseUrl}/api/water/today`);
-  const body = await response.json();
-  assert.equal(response.status, 503);
-  assert.equal(body.error.code, 'DB_NOT_CONFIGURED');
+  await start(new UnconfiguredRepository(), { ...baseConfig, dataMode: 'mysql' }, new MockWaterRepository());
+  const health = await json('/api/health');
+  const today = await json('/api/water/today');
+  assert.equal(health.body.data.database.status, 'not_configured');
+  assert.equal(today.response.status, 503);
+  assert.equal(today.body.error.code, 'DB_NOT_CONFIGURED');
 });
 
-test('非法参数使用统一错误结构', async () => {
-  const response = await fetch(`${baseUrl}/api/water/check-in`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ amountMl: 0 })
+test('非法设置、日期和统计周期使用统一错误结构', async () => {
+  const setting = await json('/api/water/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dailyTarget: 0 })
   });
-  const body = await response.json();
-  assert.equal(response.status, 400);
-  assert.equal(body.success, false);
-  assert.equal(body.error.code, 'INVALID_AMOUNT');
+  const day = await json('/api/water/day?date=not-a-date');
+  const stats = await json('/api/water/stats?period=year');
+  assert.equal(setting.body.error.code, 'INVALID_TARGET');
+  assert.equal(day.body.error.code, 'INVALID_DATE');
+  assert.equal(stats.body.error.code, 'INVALID_PERIOD');
 });

@@ -92,7 +92,7 @@ export struct StatusPanel {
         LiquidLoadingOrb()
         Text('正在汇集今天的水滴…')
           .fontSize(15)
-          .fontColor('#55768B')
+          .fontColor($r('app.color.text_secondary'))
       } else {
         Stack({ alignContent: Alignment.Center }) {
           Circle()
@@ -105,11 +105,11 @@ export struct StatusPanel {
             .fontColor('#148CBD')
         }
         Text(this.message)
-          .fontSize(15)
-          .fontColor('#365B72')
+          .fontSize(13)
+          .fontColor($r('app.color.text_secondary'))
           .textAlign(TextAlign.Center)
           .lineHeight(23)
-          .maxLines(4)
+          .maxLines(9)
         Button('重新连接')
           .height(44)
           .fontSize(14)
@@ -126,8 +126,8 @@ export struct StatusPanel {
     .width('88%')
     .padding(28)
     .borderRadius(28)
-    .backgroundColor('#72FFFFFF')
-    .border({ width: 1.2, color: '#E8FFFFFF' })
+    .backgroundColor($r('app.color.surface_primary'))
+    .border({ width: 1.2, color: $r('app.color.border_subtle') })
     .backgroundBlurStyle(BlurStyle.Thick)
     .shadow({ radius: 26, color: '#240B6489', offsetY: 12 })
   }

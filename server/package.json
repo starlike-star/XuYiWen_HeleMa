@@ -6,9 +6,11 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
     "test": "node --test",
-    "smoke": "node test/smoke.js"
+    "smoke": "node test/smoke.js",
+    "account": "node --env-file-if-exists=.env scripts/account.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.2",
     "express": "^5.1.0",
     "luxon": "^3.7.1",
     "mysql2": "^3.14.3"

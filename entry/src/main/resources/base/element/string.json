@@ -1,6 +1,10 @@
 {
   "string": [
     {
+      "name": "water_card_description",
+      "value": "喝了吗今日饮水进度"
+    },
+    {
       "name": "module_desc",
       "value": "每日喝水打卡"
     },

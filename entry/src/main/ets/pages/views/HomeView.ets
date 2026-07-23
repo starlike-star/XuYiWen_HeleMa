@@ -5,14 +5,23 @@ import { WaterStore } from '../../store/WaterStore';
 @Component
 export struct HomeView {
   @ObjectLink store: WaterStore;
-  onOpenHistory: () => void = () => {};
 
   @State private actionScale: number = 1;
-  @State private pressedToolIndex: number = -1;
 
   private dateLabel(): string {
     if (this.store.today.date.length < 10) return '今天';
     return `${this.store.today.date.substring(5, 7)}月${this.store.today.date.substring(8, 10)}日`;
+  }
+
+  private weekdayLabel(): string {
+    if (this.store.today.date.length < 10) return '';
+    const year: number = Number(this.store.today.date.substring(0, 4));
+    const month: number = Number(this.store.today.date.substring(5, 7));
+    const day: number = Number(this.store.today.date.substring(8, 10));
+    const weekdays: string[] = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+    // 使用服务端返回的年月日计算星期；UTC 仅用于避免设备时区改变日期组件。
+    const weekday: number = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+    return weekdays[weekday];
   }
 
   private recentRecord(): WaterRecord | undefined {
@@ -24,10 +33,6 @@ export struct HomeView {
     const record: WaterRecord | undefined = this.recentRecord();
     if (record === undefined || record.drankAt.length < 16) return '还没有记录';
     return record.drankAt.substring(11, 16);
-  }
-
-  private remainingLabel(): string {
-    return this.store.today.completed ? '今日已达标' : `还差 ${this.store.remaining()} 次`;
   }
 
   private touchScale(event: TouchEvent): void {
@@ -42,47 +47,38 @@ export struct HomeView {
     }
   }
 
-  private toolTouch(index: number, event: TouchEvent): void {
-    if (event.type === TouchType.Down) {
-      this.pressedToolIndex = index;
-    } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-      this.pressedToolIndex = -1;
-    }
-  }
-
   @Builder
-  private glassTool(index: number, icon: string, action: () => void) {
-    Button() {
-      Text(icon)
-        .fontSize(icon === '…' ? 25 : 22)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#163E57')
-        .translate({ y: icon === '…' ? -2 : 0 })
-    }
-    .width(48)
-    .height(48)
-    .padding(0)
-    .borderRadius(24)
-    .backgroundColor('#C9FFFFFF')
-    .border({ width: 1, color: '#FFFFFFFF' })
-    .backgroundBlurStyle(BlurStyle.Thin)
-    .shadow({ radius: 12, color: '#200C678F', offsetY: 6 })
-    .scale({
-      x: this.pressedToolIndex === index ? 0.93 : 1,
-      y: this.pressedToolIndex === index ? 0.93 : 1
-    })
-    .animation({ duration: this.pressedToolIndex === index ? 100 : 340, curve: Curve.Friction })
-    .onTouch((event: TouchEvent) => this.toolTouch(index, event))
-    .onClick(action)
-  }
-
-  @Builder
-  private statCard(label: string, value: string) {
+  private recentStatCard() {
     Column({ space: 3 }) {
-      Text(label)
+      Text('最近一次')
         .fontSize(11)
         .fontColor('#688398')
-      Text(value)
+      Text(this.recentLabel())
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#14374F')
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .alignItems(HorizontalAlign.Start)
+    .justifyContent(FlexAlign.Center)
+    .layoutWeight(1)
+    .height(58)
+    .padding({ left: 14, right: 12 })
+    .borderRadius(18)
+    .backgroundColor('#E8FFFFFF')
+    .border({ width: 1, color: '#D8E8F2F7' })
+  }
+
+  @Builder
+  private remainingStatCard() {
+    Column({ space: 3 }) {
+      Text('距离目标')
+        .fontSize(11)
+        .fontColor('#688398')
+      Text(this.store.today.completed
+        ? '今日已达标'
+        : `还差 ${Math.max(this.store.today.target - this.store.today.count, 0)} 次`)
         .fontSize(15)
         .fontWeight(FontWeight.Medium)
         .fontColor('#14374F')
@@ -102,32 +98,20 @@ export struct HomeView {
   build() {
     Scroll() {
       Column() {
-        Row() {
-          Column({ space: 5 }) {
-            Text(`${this.dateLabel()} · 星期一`)
-              .fontSize(14)
-              .fontWeight(FontWeight.Medium)
-              .fontColor('#58758A')
-            Text('喝了吗')
-              .fontSize(36)
-              .fontWeight(FontWeight.Bold)
-              .fontColor('#071D2F')
-            Text('你的身体70%都是由水组成的')
-              .fontSize(15)
-              .fontColor('#58758A')
-          }
-          .alignItems(HorizontalAlign.Start)
-
-          Blank()
-
-          Row({ space: 8 }) {
-            this.glassTool(0, '▦', () => this.onOpenHistory())
-            this.glassTool(1, '…', () => this.store.load())
-          }
-          .width(104)
-          .height(50)
+        Column({ space: 5 }) {
+          Text(`${this.dateLabel()} · ${this.weekdayLabel()}`)
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#58758A')
+          Text('喝了吗')
+            .fontSize(36)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text_primary'))
+          Text('不要等口渴了才想起喝水')
+            .fontSize(15)
+            .fontColor('#58758A')
         }
-        .alignItems(VerticalAlign.Top)
+        .alignItems(HorizontalAlign.Start)
         .width('100%')
 
         Row() {
@@ -136,7 +120,7 @@ export struct HomeView {
             .fontWeight(FontWeight.Medium)
             .fontColor('#173950')
           Blank()
-          Text('目标 8 次')
+          Text(`目标 ${this.store.today.target} 次`)
             .fontSize(14)
             .fontColor('#637E91')
         }
@@ -162,7 +146,7 @@ export struct HomeView {
                 .fontSize(52)
                 .fontWeight(FontWeight.Bold)
                 .fontColor('#082A43')
-              Text('/ 8')
+              Text(`/ ${this.store.today.target}`)
                 .fontSize(25)
                 .fontWeight(FontWeight.Medium)
                 .fontColor('#345C78')
@@ -181,11 +165,11 @@ export struct HomeView {
         .margin({ top: 4 })
 
         Row({ space: 12 }) {
-          ForEach([0, 1, 2, 3, 4, 5, 6, 7], (index: number) => {
+          ForEach([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], (index: number) => {
             Circle()
-              .width(index < this.store.today.count ? 14 : 10)
-              .height(index < this.store.today.count ? 14 : 10)
-              .fill(index < this.store.today.count ? '#22B3E2' : '#D7E5EC')
+              .width(index < Math.round(this.store.progress() * 10) ? 14 : 10)
+              .height(index < Math.round(this.store.progress() * 10) ? 14 : 10)
+              .fill(index < Math.round(this.store.progress() * 10) ? '#22B3E2' : '#D7E5EC')
               .animation({ duration: 280, curve: Curve.Friction })
           })
         }
@@ -194,8 +178,8 @@ export struct HomeView {
         .width('100%')
 
         Row({ space: 10 }) {
-          this.statCard('最近一次', this.recentLabel())
-          this.statCard('距离目标', this.remainingLabel())
+          this.recentStatCard()
+          this.remainingStatCard()
         }
         .width('100%')
         .margin({ top: 18 })
@@ -246,26 +230,31 @@ export struct HomeView {
               .alignItems(HorizontalAlign.Start)
             }
             .width('100%')
-            .padding({ left: 20, right: 20 })
+            .padding({ left: 22, right: 18 })
           }
         }
         .enabled(!this.store.isSubmitting)
-        .stateEffect(false)
-        .width('100%')
-        .height(66)
-        .padding(0)
-        .borderRadius(33)
-        .linearGradient({
-          angle: 96,
-          colors: [['#B930B7E8', 0], ['#A84CC9E5', 0.52], ['#A563D7D6', 1]]
-        })
-        .border({ width: 1.6, color: '#F0FFFFFF' })
-        .backgroundBlurStyle(BlurStyle.Thick)
+        .stateEffect(false).width('100%').height(66).padding(0).borderRadius(33)
+        .linearGradient({ angle: 96, colors: [['#B930B7E8', 0], ['#A84CC9E5', 0.52], ['#A563D7D6', 1]] })
+        .border({ width: 1.6, color: '#F0FFFFFF' }).backgroundBlurStyle(BlurStyle.Thick)
         .shadow({ radius: 20, color: '#300A78A2', offsetY: 9 })
         .scale({ x: this.actionScale, y: this.actionScale })
-        .margin({ top: 24, bottom: 12 })
         .onTouch((event: TouchEvent) => this.touchScale(event))
         .onClick(() => this.store.checkIn())
+        .width('100%').margin({ top: 24, bottom: 12 })
+
+        if (this.store.undoVisible) {
+          Row() {
+            Text('已记录一次饮水').fontSize(13).fontColor('#315D76')
+            Blank()
+            Button('撤销').height(38).fontSize(13).fontWeight(FontWeight.Bold)
+              .fontColor('#087EB8').backgroundColor(Color.Transparent)
+              .onClick(() => this.store.undoLastCheckIn())
+          }
+          .width('100%').height(50).padding({ left: 16, right: 8 }).borderRadius(22)
+          .backgroundColor('#EFFFFFFF').backgroundBlurStyle(BlurStyle.Thick)
+          .border({ width: 1, color: '#FFFFFFFF' })
+        }
 
       }
       .width('100%')
