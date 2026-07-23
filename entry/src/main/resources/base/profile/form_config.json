@@ -1,0 +1,21 @@
+{
+  "forms": [
+    {
+      "name": "water_card",
+      "description": "$string:water_card_description",
+      "src": "./ets/widget/pages/WaterCard.ets",
+      "uiSyntax": "arkts",
+      "window": {
+        "designWidth": 360,
+        "autoDesignWidth": true
+      },
+      "colorMode": "auto",
+      "isDefault": true,
+      "updateEnabled": false,
+      "defaultDimension": "2*4",
+      "supportDimensions": [
+        "2*4"
+      ]
+    }
+  ]
+}
